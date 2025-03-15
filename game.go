@@ -27,9 +27,9 @@ const (
 )
 
 const (
-	//3行
+	//6行
 	ROW_DEF = 6
-	//5列
+	//6列
 	COL_DEF = 6
 	//图案元素
 	BUFF_SIZE = ROW_DEF * COL_DEF
@@ -312,10 +312,12 @@ var Mult = map[int]map[int]int{
 }
 
 type Prize struct {
-	slot  int
-	count int
-	value int64
-	idxs  []int
+	slot    int
+	count   int
+	mult    int
+	addmult int
+	value   int64
+	idxs    []int
 }
 type SlotInfo struct {
 	slot int
@@ -323,12 +325,14 @@ type SlotInfo struct {
 }
 
 type RoundInfo struct {
-	cur     [BUFF_SIZE]int
-	final   [BUFF_SIZE]int
-	remove  []SlotInfo
-	add     []SlotInfo
-	prices  []Prize
-	special []int
+	cur       [BUFF_SIZE]int //当前
+	final     [BUFF_SIZE]int //最终
+	remove    []SlotInfo     //移除
+	add       []SlotInfo     //添加
+	prices    []Prize        //中奖
+	special   []int          //炸弹，火箭，地雷位置的索引
+	curmult   []int          //当前乘数区
+	finalmult []int          //最终乘数区
 }
 
 var rd = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -354,9 +358,70 @@ func randBuffer(out *[BUFF_SIZE]int) {
 	}
 }
 
-func printfRoundInfo(i int, round *RoundInfo) {
+func randFreeBuffer(out *[BUFF_SIZE]int, mult *[BUFF_SIZE]int) (cp []int) {
+	var Buffers = []int{
+		GAME_SOLT_1,
+		GAME_SOLT_2,
+		GAME_SOLT_3,
+		GAME_SOLT_4,
+		GAME_SOLT_5,
+		GAME_SOLT_6,
+		GAME_SOLT_7,
+		GAME_SOLT_8,
+		GAME_SOLT_WILD,
+	}
+	cp = make([]int, BUFF_SIZE)
+	for col := 0; col < COL_DEF; col++ {
+		for row := 0; row < ROW_DEF; row++ {
+			idx := row*COL_DEF + col
+			if mult[idx] > 1 {
+				out[idx] = GAME_SOLT_WILD
+			} else {
+				out[idx] = Buffers[rd.Intn(len(Buffers))]
+			}
+			cp[idx] = mult[idx]
+		}
+	}
+	return
+}
+
+func printfRoundInfo(i int, round *RoundInfo, bfree bool, fcout int) {
+	strSlot := [GAME_SOLT_MAX]string{
+		"0",
+		"1",
+		"2",
+		"3",
+		"4",
+		"5",
+		"6",
+		"7",
+		"8",
+		"w",
+		"a",
+		"b",
+		"c",
+		"d",
+	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("\n====<%d> 9:WILD,a:BOMB,b:ROCKET,c:MINE,d:SCATTER", i))
+	bCMult := false
+	bFMult := false
+	if bfree {
+		sb.WriteString(fmt.Sprintf("\nFREE:%d.%d w:WILD,a:BOMB,b:ROCKET,c:MINE,d:SCATTER", fcout, i))
+		for i := 0; i < len(round.curmult); i++ {
+			if round.curmult[i] > 1 {
+				bCMult = true
+				break
+			}
+		}
+		for i := 0; i < len(round.curmult); i++ {
+			if round.finalmult[i] > 1 {
+				bFMult = true
+				break
+			}
+		}
+	} else {
+		sb.WriteString(fmt.Sprintf("\n====<%d> w:WILD,a:BOMB,b:ROCKET,c:MINE,d:SCATTER", i))
+	}
 	if len(round.special) > 0 {
 		sb.WriteString(" <!BOMB OR ROCKET OR MINE!>\n")
 	} else {
@@ -369,7 +434,11 @@ func printfRoundInfo(i int, round *RoundInfo) {
 	for row := 0; row < ROW_DEF; row++ {
 		for col := 0; col < COL_DEF; col++ {
 			idx := row*COL_DEF + col
-			sb.WriteString(fmt.Sprintf("%x", round.cur[idx]))
+			if bCMult {
+				sb.WriteString(fmt.Sprintf("[%s,%d]", strSlot[round.cur[idx]], round.curmult[idx]))
+			} else {
+				sb.WriteString(strSlot[round.cur[idx]])
+			}
 			if col < ROW_DEF-1 {
 				sb.WriteString(",")
 			}
@@ -384,7 +453,7 @@ func printfRoundInfo(i int, round *RoundInfo) {
 			if tmp[idx] == 0 {
 				sb.WriteString("*")
 			} else {
-				sb.WriteString(fmt.Sprintf("%x", tmp[idx]))
+				sb.WriteString(strSlot[tmp[idx]])
 			}
 			if col < ROW_DEF-1 {
 				sb.WriteString(",")
@@ -397,7 +466,11 @@ func printfRoundInfo(i int, round *RoundInfo) {
 		}
 		for col := 0; col < COL_DEF; col++ {
 			idx := row*COL_DEF + col
-			sb.WriteString(fmt.Sprintf("%x", round.final[idx]))
+			if bFMult {
+				sb.WriteString(fmt.Sprintf("[%s,%d]", strSlot[round.final[idx]], round.finalmult[idx]))
+			} else {
+				sb.WriteString(strSlot[round.final[idx]])
+			}
 			if col < ROW_DEF-1 {
 				sb.WriteString(",")
 			}
@@ -411,7 +484,7 @@ func printfRoundInfo(i int, round *RoundInfo) {
 		//sb.WriteString("price info\n")
 	}
 	for _, price := range round.prices {
-		sb.WriteString(fmt.Sprintf("bet:100 slot:%d count:%d wins:%d\n", price.slot, price.count, price.value))
+		sb.WriteString(fmt.Sprintf("bet:100 slot:%d count:%d mult:%d addmult:%d wins:%d\n", price.slot, price.count, price.mult, price.addmult, price.value))
 	}
 	fmt.Print(sb.String())
 }
@@ -456,9 +529,13 @@ func findSameElements(buff *[BUFF_SIZE]int) [][]int {
 			idx := row*COL_DEF + col
 			switch buff[idx] {
 			case GAME_SOLT_WILD:
+				fallthrough
 			case GAME_SOLT_BOMB:
+				fallthrough
 			case GAME_SOLT_ROCKET:
+				fallthrough
 			case GAME_SOLT_MINE:
+				fallthrough
 			case GAME_SOLT_SCATTER:
 				continue
 			}
@@ -485,27 +562,44 @@ func getMult(slot int, count int) int {
 	return 0
 }
 
-func calcSocre(betScore int, info *RoundInfo) int64 {
+func calcSocre(betScore int, info *RoundInfo, mult *[BUFF_SIZE]int) int64 {
+	reset := map[int]int{}
 	elements := findSameElements(&info.cur)
 	for _, element := range elements {
+		addMult := 0
 		solt := GAME_SOLT_EMPTY
 		for i := 0; i < len(element); i++ {
-			if info.cur[element[i]] != GAME_SOLT_WILD {
-				solt = info.cur[element[i]]
+			idx := element[i]
+			if info.cur[idx] != GAME_SOLT_WILD {
+				solt = info.cur[idx]
 			}
 			info.remove = append(info.remove, SlotInfo{
-				slot: info.cur[element[i]],
-				idx:  element[i],
+				slot: info.cur[idx],
+				idx:  idx,
 			})
+			if mult != nil && mult[element[i]] > 1 {
+				addMult += mult[idx]
+				reset[idx] = idx
+			}
+		}
+		if addMult == 0 {
+			addMult = 1
 		}
 		count := len(element)
 		mult := getMult(solt, count)
 		info.prices = append(info.prices, Prize{
-			slot:  solt,
-			count: count,
-			value: int64(betScore) * int64(mult),
-			idxs:  element,
+			slot:    solt,
+			count:   count,
+			mult:    mult,
+			addmult: addMult,
+			value:   int64(betScore) * int64(mult) * int64(addMult),
+			idxs:    element,
 		})
+	}
+	//倍数用完就没了
+	for k := range reset {
+		mult[k] = 1
+		info.finalmult[k] = 1
 	}
 	if len(elements) > 0 {
 		return 1
@@ -513,9 +607,11 @@ func calcSocre(betScore int, info *RoundInfo) int64 {
 	return 0
 }
 
-func randDropBuffer(round *RoundInfo) {
+func randDropBuffer(round *RoundInfo, mult *[BUFF_SIZE]int) {
 	//赋值
 	round.final = round.cur
+	//原始图案
+	buff := round.final
 	//消除
 	for _, v := range round.remove {
 		round.final[v.idx] = GAME_SOLT_EMPTY
@@ -534,7 +630,15 @@ func randDropBuffer(round *RoundInfo) {
 			slot = GAME_SOLT_MINE
 		}
 		if slot != GAME_SOLT_EMPTY {
-			idx := round.prices[i].idxs[rd.Intn(len(round.prices[i].idxs))]
+			//WILD位置不能生成图案
+			tmp := []int{}
+			//过滤WILD的位置
+			for _, idx := range round.prices[i].idxs {
+				if buff[idx] != GAME_SOLT_WILD {
+					tmp = append(tmp, idx)
+				}
+			}
+			idx := tmp[rd.Intn(len(tmp))]
 			round.final[idx] = slot
 			round.add = append(round.add, SlotInfo{
 				slot: slot,
@@ -543,10 +647,10 @@ func randDropBuffer(round *RoundInfo) {
 		}
 	}
 	//掉落添加
-	round.add = drop(&round.final)
+	round.add = drop(&round.final, mult)
 }
 
-func drop(out *[BUFF_SIZE]int) (add []SlotInfo) {
+func drop(out *[BUFF_SIZE]int, mult *[BUFF_SIZE]int) (add []SlotInfo) {
 	var Buffers = []int{
 		GAME_SOLT_1,
 		GAME_SOLT_2,
@@ -558,37 +662,116 @@ func drop(out *[BUFF_SIZE]int) (add []SlotInfo) {
 		GAME_SOLT_8,
 		GAME_SOLT_WILD,
 	}
+	// out[0] = 4
+	// out[6] = 13
+	// out[12] = 13
+	// out[18] = 1
+	// out[24] = 0
+	// out[30] = 0
+
 	for col := 0; col < COL_DEF; col++ {
-		//列缓存
-		colarrs := []int{}
-		for row := 0; row < ROW_DEF; row++ {
-			idx := row*COL_DEF + col
-			if out[idx] != GAME_SOLT_EMPTY {
-				colarrs = append(colarrs, out[idx])
-			}
-		}
-		dropCount := ROW_DEF - len(colarrs)
-		for i := 0; i < dropCount; i++ {
-			colarrs = append([]int{GAME_SOLT_EMPTY}, colarrs...)
-		}
-		if dropCount > 0 {
-			for row := 0; row < ROW_DEF; row++ {
-				if colarrs[row] == GAME_SOLT_EMPTY {
-					slotType := Buffers[rd.Intn(len(Buffers))]
-					colarrs[row] = slotType
-					add = append(add, SlotInfo{
-						slot: slotType,
-						idx:  row*COL_DEF + col,
-					})
+		// sb := strings.Builder{}
+		// for row := 0; row < ROW_DEF; row++ {
+		// 	idx := row*COL_DEF + col
+		// 	sb.WriteString(fmt.Sprintf("%02d,", out[idx]))
+		// 	if row == ROW_DEF-1 {
+		// 		sb.WriteString("\n")
+		// 	}
+		// }
+		// fmt.Print("pre:" + sb.String())
+		//下坠
+		for i := ROW_DEF - 1; i >= 0; i-- {
+			idxi := i*COL_DEF + col
+			if out[idxi] == GAME_SOLT_EMPTY {
+				swap := -1
+				for j := i - 1; j >= 0; j-- {
+					idxj := j*COL_DEF + col
+					//特殊元素不能下坠
+					switch out[idxj] {
+					case GAME_SOLT_EMPTY:
+						fallthrough
+					case GAME_SOLT_BOMB:
+						fallthrough
+					case GAME_SOLT_ROCKET:
+						fallthrough
+					case GAME_SOLT_MINE:
+						continue
+					}
+					//有乘数的
+					if mult != nil && mult[idxj] > 1 {
+						continue
+					}
+					swap = idxj
+					break
+				}
+				if swap > -1 {
+					out[idxi] = out[swap]
+					out[swap] = GAME_SOLT_EMPTY
 				}
 			}
-			//用最新的图
-			for row, v := range colarrs {
-				idx := row*COL_DEF + col
-				out[idx] = v
+		}
+		// sb = strings.Builder{}
+		// for row := 0; row < ROW_DEF; row++ {
+		// 	idx := row*COL_DEF + col
+		// 	sb.WriteString(fmt.Sprintf("%02d,", out[idx]))
+		// 	if row == ROW_DEF-1 {
+		// 		sb.WriteString("\n")
+		// 	}
+		// }
+		// fmt.Print("drop:" + sb.String())
+		//填充
+		for row := ROW_DEF - 1; row >= 0; row-- {
+			idx := row*COL_DEF + col
+			if out[idx] == GAME_SOLT_EMPTY {
+				slotType := Buffers[rd.Intn(len(Buffers))]
+				add = append(add, SlotInfo{
+					slot: slotType,
+					idx:  idx,
+				})
+				out[idx] = slotType
 			}
 		}
+		// sb = strings.Builder{}
+		// for row := 0; row < ROW_DEF; row++ {
+		// 	idx := row*COL_DEF + col
+		// 	sb.WriteString(fmt.Sprintf("%02d,", out[idx]))
+		// 	if row == ROW_DEF-1 {
+		// 		sb.WriteString("\n")
+		// 	}
+		// }
+		// fmt.Print("last:" + sb.String())
 	}
+	// 	//列缓存
+	// 	colarrs := []int{}
+	// 	//三个特殊元素不可以掉落
+	// 	for row := 0; row < ROW_DEF; row++ {
+	// 		idx := row*COL_DEF + col
+	// 		if out[idx] != GAME_SOLT_EMPTY {
+	// 			colarrs = append(colarrs, out[idx])
+	// 		}
+	// 	}
+	// 	dropCount := ROW_DEF - len(colarrs)
+	// 	for i := 0; i < dropCount; i++ {
+	// 		colarrs = append([]int{GAME_SOLT_EMPTY}, colarrs...)
+	// 	}
+	// 	if dropCount > 0 {
+	// 		for row := 0; row < ROW_DEF; row++ {
+	// 			if colarrs[row] == GAME_SOLT_EMPTY {
+	// 				slotType := Buffers[rd.Intn(len(Buffers))]
+	// 				colarrs[row] = slotType
+	// 				add = append(add, SlotInfo{
+	// 					slot: slotType,
+	// 					idx:  row*COL_DEF + col,
+	// 				})
+	// 			}
+	// 		}
+	// 		//用最新的图
+	// 		for row, v := range colarrs {
+	// 			idx := row*COL_DEF + col
+	// 			out[idx] = v
+	// 		}
+	// 	}
+	// }
 	return
 }
 
@@ -603,21 +786,22 @@ func checkSpecialBuff(round *RoundInfo) {
 	}
 }
 
-func randDropSpecialBuffer(round *RoundInfo) {
+func randDropSpecialBuffer(round *RoundInfo, mult *[BUFF_SIZE]int) {
 	remove := [BUFF_SIZE]bool{}
+	//图案消除
 	for i := 0; i < len(round.special); i++ {
 		idx := round.special[i]
 		switch round.final[idx] {
 		case GAME_SOLT_BOMB:
-			bombRemove(idx, &round.final, &remove)
+			bombRemove(idx, &round.final, &remove, mult)
 		case GAME_SOLT_ROCKET:
-			rocketRemove(idx, &round.final, &remove)
+			rocketRemove(idx, &round.final, &remove, mult)
 		case GAME_SOLT_MINE:
 			mineRemove(idx, &round.final, &remove)
 		}
 	}
-	//记录消除
 	for i := 0; i < BUFF_SIZE; i++ {
+		//记录消除
 		if remove[i] {
 			round.remove = append(round.remove, SlotInfo{
 				slot: round.final[i],
@@ -625,12 +809,16 @@ func randDropSpecialBuffer(round *RoundInfo) {
 			})
 			round.final[i] = GAME_SOLT_EMPTY
 		}
+		//免费的乘数区
+		if mult != nil {
+			round.finalmult[i] = mult[i]
+		}
 	}
 	//掉落添加
-	round.add = drop(&round.final)
+	round.add = drop(&round.final, mult)
 }
 
-func bombRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool) {
+func bombRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool, mult *[BUFF_SIZE]int) (c int) {
 	remove[idx] = true
 	//方向
 	directions := [][]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {1, -1}, {-1, 1}}
@@ -644,6 +832,60 @@ func bombRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool) {
 			next := nextX*COL_DEF + nextY
 			if buff[next] < GAME_SOLT_WILD {
 				remove[next] = true
+			} else if buff[next] == GAME_SOLT_WILD {
+				if mult != nil && mult[next] > 0 {
+					mult[next]++
+					c++
+				}
+			}
+		}
+	}
+	// sb := strings.Builder{}
+	// for row := 0; row < ROW_DEF; row++ {
+	// 	for col := 0; col < COL_DEF; col++ {
+	// 		idx := row*COL_DEF + col
+	// 		if remove[idx] {
+	// 			sb.WriteString("*")
+	// 		} else {
+	// 			sb.WriteString(fmt.Sprintf("%x", buff[idx]))
+	// 		}
+	// 		if col < ROW_DEF-1 {
+	// 			sb.WriteString(",")
+	// 		}
+	// 	}
+	// 	sb.WriteString("\n")
+	// }
+	// fmt.Print(sb.String())
+	return
+}
+
+func rocketRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool, mult *[BUFF_SIZE]int) (c int) {
+	remove[idx] = true
+
+	currX := idx / ROW_DEF
+	currY := idx % COL_DEF
+
+	//消除横向
+	for i := 0; i < COL_DEF; i++ {
+		next := currX*COL_DEF + i
+		if buff[next] < GAME_SOLT_WILD {
+			remove[next] = true
+		} else if buff[next] == GAME_SOLT_WILD {
+			if mult != nil && mult[next] > 0 {
+				mult[next]++
+				c++
+			}
+		}
+	}
+	//消除纵向
+	for i := 0; i < ROW_DEF; i++ {
+		next := i*COL_DEF + currY
+		if buff[next] < GAME_SOLT_WILD {
+			remove[next] = true
+		} else if buff[next] == GAME_SOLT_WILD {
+			if mult != nil && mult[next] > 0 {
+				mult[next]++
+				c++
 			}
 		}
 	}
@@ -664,45 +906,7 @@ func bombRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool) {
 	// 	sb.WriteString("\n")
 	// }
 	// fmt.Print(sb.String())
-}
-
-func rocketRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool) {
-	remove[idx] = true
-
-	currX := idx / ROW_DEF
-	currY := idx % COL_DEF
-
-	//消除横向
-	for i := 0; i < COL_DEF; i++ {
-		next := currX*COL_DEF + i
-		if buff[next] < GAME_SOLT_WILD {
-			remove[next] = true
-		}
-	}
-	//消除纵向
-	for i := 0; i < ROW_DEF; i++ {
-		next := i*COL_DEF + currY
-		if buff[next] < GAME_SOLT_WILD {
-			remove[next] = true
-		}
-	}
-
-	// sb := strings.Builder{}
-	// for row := 0; row < ROW_DEF; row++ {
-	// 	for col := 0; col < COL_DEF; col++ {
-	// 		idx := row*COL_DEF + col
-	// 		if remove[idx] {
-	// 			sb.WriteString("*")
-	// 		} else {
-	// 			sb.WriteString(fmt.Sprintf("%x", buff[idx]))
-	// 		}
-	// 		if col < ROW_DEF-1 {
-	// 			sb.WriteString(",")
-	// 		}
-	// 	}
-	// 	sb.WriteString("\n")
-	// }
-	// fmt.Print(sb.String())
+	return
 }
 
 func mineRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool) {
@@ -729,4 +933,17 @@ func mineRemove(idx int, buff *[BUFF_SIZE]int, remove *[BUFF_SIZE]bool) {
 	// 	sb.WriteString("\n")
 	// }
 	// fmt.Print(sb.String())
+}
+
+func checkTrigerFreeCount(buff *[BUFF_SIZE]int) int {
+	count := 0
+	for i := 0; i < BUFF_SIZE; i++ {
+		if buff[i] == GAME_SOLT_SCATTER {
+			count++
+		}
+	}
+	if count >= 3 {
+		return 10
+	}
+	return 0
 }
